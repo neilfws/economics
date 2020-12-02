@@ -1,0 +1,137 @@
+---
+title: "Improved maps for SMH COVID spending"
+author: "Neil Saunders"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    keep_md: yes
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+library(dplyr)
+library(stringr)
+library(jsonlite)
+library(rgdal)
+library(leaflet)
+```
+
+# Summary
+
+https://www.smh.com.au/business/the-economy/sydney-s-wealthiest-tightened-their-belts-during-lockdown-now-they-are-spending-again-20201201-p56jn1.html
+
+# Data
+```{r read-json}
+smh <- fromJSON("../data/smh.json")
+
+smh_df <- tibble(
+  lga_code = smh$elements$data[[3]][, , 1][1,],
+  lga_name = smh$elements$data[[3]][, , 5][1,],
+  coords   = smh$elements$data[[3]][, , 4][1,],
+  before   = smh$elements$data[[3]][, , 2][1,],
+  after    = smh$elements$data[[3]][, , 2][2,]
+)
+
+lga <- readOGR("../../../health/covid19/nsw_covid/data/1270055003_lga_2019_aust_shp/LGA_2019_AUST.shp")
+```
+
+## Data pre-processing
+```{r process-data}
+smh_df <- smh_df %>% 
+  mutate(before = as.numeric(before), 
+         after  = as.numeric(after), 
+         diff   = after - before) %>% 
+  group_by(lga_name) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  mutate(lga_name = tolower(lga_name))
+
+nsw <- subset(lga, STE_CODE16 == 1)
+nsw@data <- nsw@data %>% 
+  mutate(LGA_NAME19_new = str_remove_all(LGA_NAME19, "\\s\\([A-Z]+\\)"),
+         LGA_NAME19_new = str_remove_all(LGA_NAME19_new, "\\sNSW"),
+         LGA_NAME19_new = tolower(LGA_NAME19_new))
+
+nsw@data <- nsw@data %>% 
+  left_join(smh_df, 
+            by = c("LGA_NAME19_new" = "lga_name"))
+```
+
+# Maps
+
+## Before map
+```{r map-before-data}
+pal <- colorNumeric(
+  palette = "plasma",
+  domain = nsw@data$before,
+  na.color = "#ffffff"
+)
+
+nsw_map <- leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(data = nsw,
+              weight = 1,
+              fillOpacity = 0.5,
+              label = ~paste(LGA_NAME19_new, " = ", before),
+              fillColor = ~pal(before)) %>% 
+  addLegend("bottomright",
+            title = "Lockdown % of normal",
+            pal = pal,
+            values = smh_df$before,
+            na.label = "")
+
+nsw_map
+```
+
+## After map
+```{r map-after-data}
+pal <- colorNumeric(
+  palette = "plasma",
+  domain = nsw@data$after,
+  na.color = "#ffffff"
+)
+
+nsw_map <- leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(data = nsw,
+              weight = 1,
+              fillOpacity = 0.5,
+              label = ~paste(LGA_NAME19_new, " = ", after),
+              fillColor = ~pal(after)) %>% 
+  addLegend("bottomright",
+            title = "Post-lockdown % of normal",
+            pal = pal,
+            values = smh_df$after,
+            na.label = "")
+
+nsw_map
+```
+
+## Difference map
+```{r map-diff-data}
+pal <- colorNumeric(
+  palette = "plasma",
+  domain = nsw@data$diff,
+  na.color = "#ffffff"
+)
+
+nsw_map <- leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(data = nsw,
+              weight = 1,
+              fillOpacity = 0.5,
+              label = ~paste(LGA_NAME19_new, " = ", diff),
+              fillColor = ~pal(diff)) %>% 
+  addLegend("bottomright",
+            title = "Differential after % - before %",
+            pal = pal,
+            values = smh_df$diff,
+            na.label = "")
+
+nsw_map
+```
+
