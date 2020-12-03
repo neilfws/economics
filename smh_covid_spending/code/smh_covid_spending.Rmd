@@ -11,20 +11,38 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE, 
+                      warning = FALSE)
 
 library(dplyr)
 library(stringr)
 library(jsonlite)
 library(rgdal)
 library(leaflet)
+library(knitr)
+library(kableExtra)
 ```
 
-# Summary
+# Introduction
 
-https://www.smh.com.au/business/the-economy/sydney-s-wealthiest-tightened-their-belts-during-lockdown-now-they-are-spending-again-20201201-p56jn1.html
+An attempt to improve the maps used in the Sydney Morning Herald article [Sydney's wealthiest tightened their belts during lockdown. Now they are spending again](https://www.smh.com.au/business/the-economy/sydney-s-wealthiest-tightened-their-belts-during-lockdown-now-they-are-spending-again-20201201-p56jn1.html).
+
+The maps in this article have several problems:
+
+- poor choice of colour palette doesn't distinguish values over a wide range
+- lack of contrast due to transparency values
+- difficult to compare before/after values as zoom level is not maintained when switching tabs
+
+![](../data/smh_map.png)
+
 
 # Data
+The underlying data for the maps in the SMH article is stored as a large JSON string in the web page source. With some effort this can be copy-pasted to an editor, checked and cleaned up using JSON Lint and saved as the file `smh.json`.
+
+We can read the file using `jsonlite::fromJSON`, which results in a large and complex data structure. The relevant elements can be extracted as vectors and stored in tibble columns.
+
+
 ```{r read-json}
 smh <- fromJSON("../data/smh.json")
 
@@ -35,11 +53,22 @@ smh_df <- tibble(
   before   = smh$elements$data[[3]][, , 2][1,],
   after    = smh$elements$data[[3]][, , 2][2,]
 )
+```
 
+For maps of NSW local government areas, we use the shapefile `LGA_2019_AUST.shp` available online and reused from a previous project.
+
+```{r read-shp}
 lga <- readOGR("../../../health/covid19/nsw_covid/data/1270055003_lga_2019_aust_shp/LGA_2019_AUST.shp")
 ```
 
 ## Data pre-processing
+For the SMH article data:
+
+-convert numbers stored as character to numeric.
+- at least one LGA name (Sydney) occurs twice, so group and keep the first instance
+- finally, convert LGA names to lower-case for easier matching
+    - for example we have Ku-Ring-Gai in one dataset and Ku-ring-gai in the other
+
 ```{r process-data}
 smh_df <- smh_df %>% 
   mutate(before = as.numeric(before), 
@@ -49,22 +78,41 @@ smh_df <- smh_df %>%
   slice(1) %>% 
   ungroup() %>% 
   mutate(lga_name = tolower(lga_name))
+```
 
+For the shapefile data:
+
+- remove the electoral ward letters _e.g._ `(A)` from LGA names
+- remove the one instance of " NSW" as a suffix
+- convert LGA names to lower-case
+
+```{r process-shp}
 nsw <- subset(lga, STE_CODE16 == 1)
 nsw@data <- nsw@data %>% 
   mutate(LGA_NAME19_new = str_remove_all(LGA_NAME19, "\\s\\([A-Z]+\\)"),
          LGA_NAME19_new = str_remove_all(LGA_NAME19_new, "\\sNSW"),
          LGA_NAME19_new = tolower(LGA_NAME19_new))
+```
 
+Now we can successfully join the SMH article data to the shapefile data.
+
+```{r join-data}
 nsw@data <- nsw@data %>% 
   left_join(smh_df, 
             by = c("LGA_NAME19_new" = "lga_name"))
+
+nsw@data %>% 
+  head(10) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "condensed"))
 ```
 
 # Maps
 
 ## Before map
-```{r map-before-data}
+Colour the LGAs by lockdown period average spend per person as percentage of normal.
+
+```{r map-before-data, echo=FALSE}
 pal <- colorNumeric(
   palette = "plasma",
   domain = nsw@data$before,
@@ -79,7 +127,7 @@ nsw_map <- leaflet() %>%
               label = ~paste(LGA_NAME19_new, " = ", before),
               fillColor = ~pal(before)) %>% 
   addLegend("bottomright",
-            title = "Lockdown % of normal",
+            title = "Lockdown spend % of normal",
             pal = pal,
             values = smh_df$before,
             na.label = "")
@@ -88,7 +136,9 @@ nsw_map
 ```
 
 ## After map
-```{r map-after-data}
+Colour the LGAs by post-lockdown period (September-October 2020) average spend per person as percentage of normal.
+
+```{r map-after-data, echo=FALSE}
 pal <- colorNumeric(
   palette = "plasma",
   domain = nsw@data$after,
@@ -103,7 +153,7 @@ nsw_map <- leaflet() %>%
               label = ~paste(LGA_NAME19_new, " = ", after),
               fillColor = ~pal(after)) %>% 
   addLegend("bottomright",
-            title = "Post-lockdown % of normal",
+            title = "Sep-Oct 2020 spend % of normal",
             pal = pal,
             values = smh_df$after,
             na.label = "")
@@ -112,7 +162,9 @@ nsw_map
 ```
 
 ## Difference map
-```{r map-diff-data}
+Colour the LGAs by difference in percentage points "after" (September-October 2020) minus "before" (lockdown period).
+
+```{r map-diff-data, echo=FALSE}
 pal <- colorNumeric(
   palette = "plasma",
   domain = nsw@data$diff,
@@ -127,7 +179,7 @@ nsw_map <- leaflet() %>%
               label = ~paste(LGA_NAME19_new, " = ", diff),
               fillColor = ~pal(diff)) %>% 
   addLegend("bottomright",
-            title = "Differential after % - before %",
+            title = "Differential spend after % - before %",
             pal = pal,
             values = smh_df$diff,
             na.label = "")
